@@ -107,6 +107,8 @@ int main(int argc, char **argv) {
                     input_buffer[input_len] = '\0';
                 }
             } else if (key >= 32 && key <= 126) {
+                size_t type_limit = math_min_size(target_len, input_capacity - 1);
+
                 if (input_len + 1 >= input_capacity) {
                     size_t new_capacity = input_capacity * 2;
                     input_buffer = (char *)mem_resize(input_buffer, new_capacity);
@@ -114,7 +116,7 @@ int main(int argc, char **argv) {
                     input_capacity = new_capacity;
                 }
 
-                if (input_len < target_len) {
+                if (input_len < type_limit) {
                     input_buffer[input_len] = (char)key;
                     input_len++;
                     input_buffer[input_len] = '\0';
