@@ -19,7 +19,7 @@ int str_equals(const char *left, const char *right) {
     return left[i] == right[i];
 }
 
-size_t str_count_correct_prefix(const char *target, const char *input, size_t input_len) {
+size_t str_count_correct(const char *target, const char *input, size_t input_len) {
     size_t i;
     size_t count = 0;
     for (i = 0; i < input_len; i++) {

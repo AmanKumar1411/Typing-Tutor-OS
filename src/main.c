@@ -64,9 +64,11 @@ int main(int argc, char **argv) {
     size_t input_capacity;
     char *input_buffer;
     size_t input_len = 0;
-    double start_time;
+    double start_time = 0.0;
     double current_time;
     int finished = 0;
+    int timer_started = 0;
+    int exit_by_escape = 0;
 
     if (argc > 1) {
         loaded_text = load_text_file(argv[1]);
@@ -87,16 +89,16 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    start_time = time_now_seconds();
-
     while (!finished) {
         int key = keyboard_read_char_nonblocking();
 
         if (key != KEY_NONE) {
             if (key == KEY_ESC) {
                 finished = 1;
+                exit_by_escape = 1;
             } else if (key == 3) {
                 finished = 1;
+                exit_by_escape = 1;
             } else if (key == KEY_ENTER || key == '\n') {
                 finished = 1;
             } else if (key == KEY_BACKSPACE || key == KEY_DELETE) {
@@ -116,14 +118,18 @@ int main(int argc, char **argv) {
                     input_buffer[input_len] = (char)key;
                     input_len++;
                     input_buffer[input_len] = '\0';
+                    if (!timer_started) {
+                        start_time = time_now_seconds();
+                        timer_started = 1;
+                    }
                 }
             }
         }
 
         current_time = time_now_seconds();
         {
-            double elapsed = current_time - start_time;
-            size_t correct = str_count_correct_prefix(target_text, input_buffer, input_len);
+            double elapsed = timer_started ? (current_time - start_time) : 0.0;
+            size_t correct = str_count_correct(target_text, input_buffer, input_len);
             double accuracy = math_percent(correct, input_len);
             double wpm = math_wpm(input_len, elapsed);
             screen_render(target_text, input_buffer, input_len, elapsed, accuracy, wpm, correct, 0);
@@ -140,8 +146,8 @@ int main(int argc, char **argv) {
     keyboard_shutdown();
 
     {
-        double total_elapsed = time_now_seconds() - start_time;
-        size_t correct_total = str_count_correct_prefix(target_text, input_buffer, input_len);
+        double total_elapsed = timer_started ? (time_now_seconds() - start_time) : 0.0;
+        size_t correct_total = str_count_correct(target_text, input_buffer, input_len);
         double final_accuracy = math_percent(correct_total, input_len);
         double final_wpm = math_wpm(input_len, total_elapsed);
 
@@ -157,8 +163,10 @@ int main(int argc, char **argv) {
         );
     }
 
-    while (keyboard_read_char_nonblocking() == KEY_NONE) {
-        usleep(10000);
+    if (!exit_by_escape) {
+        while (keyboard_read_char_nonblocking() == KEY_NONE) {
+            usleep(10000);
+        }
     }
 
     mem_free(input_buffer);
