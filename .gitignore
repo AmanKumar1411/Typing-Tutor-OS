@@ -1,1 +1,54 @@
 typing_tutor
+
+# Build artifacts and object files
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+
+# Build directories
+/build/
+/dist/
+/bin/
+/obj/
+
+# Dependency files
+*.d
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Core dumps
+core
+core.*
+
+# Valgrind output
+valgrind.log
+callgrind.out.*
+
+# Log files
+*.log
+
+# Executables built elsewhere
+/typing_tutor.dSYM/
+
+# Compiled Python
+__pycache__/
+*.pyc
+*.pyo
