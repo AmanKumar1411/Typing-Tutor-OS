@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Typing Tutor</title>
+  <style>
+    :root {
+      --bg: #f7f7f8;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --green: #1f8f4d;
+      --red: #c0392b;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+      padding: 24px;
+    }
+
+    .app {
+      width: 100%;
+      max-width: 760px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+    }
+
+    h1 {
+      margin: 0 0 16px;
+      text-align: center;
+      font-size: 1.5rem;
+    }
+
+    .section {
+      margin-bottom: 16px;
+    }
+
+    .label {
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    #targetText {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 64px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      font-family: "Courier New", monospace;
+      background: #fafafa;
+    }
+
+    #inputText {
+      width: 100%;
+      min-height: 90px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 1rem;
+      line-height: 1.5;
+      resize: vertical;
+      font-family: "Courier New", monospace;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      text-align: center;
+      background: #fafafa;
+    }
+
+    .stat .name {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .stat .value {
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+
+    #status {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .correct {
+      color: var(--green);
+    }
+
+    .incorrect {
+      color: var(--red);
+    }
+
+    .pending {
+      color: var(--text);
+    }
+
+    @media (max-width: 640px) {
+      .stats {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="app">
+    <h1>Typing Tutor</h1>
+
+    <section class="section">
+      <div class="label">Target Text</div>
+      <div id="targetText" aria-live="polite"></div>
+    </section>
+
+    <section class="section">
+      <div class="label">Type Here</div>
+      <textarea id="inputText" placeholder="Start typing to begin..."></textarea>
+    </section>
+
+    <section class="section">
+      <div class="label">Stats</div>
+      <div class="stats">
+        <div class="stat">
+          <div class="name">Time</div>
+          <div class="value" id="timeValue">0.0 s</div>
+        </div>
+        <div class="stat">
+          <div class="name">Accuracy</div>
+          <div class="value" id="accuracyValue">0.00 %</div>
+        </div>
+        <div class="stat">
+          <div class="name">WPM</div>
+          <div class="value" id="wpmValue">0.00</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="actions">
+        <button id="resetBtn" type="button">Reset</button>
+      </div>
+      <div id="status">Start typing to begin.</div>
+    </section>
+  </main>
+
+  <script>
+    const targetText = "systems programming in c requires precision and practice";
+
+    const targetEl = document.getElementById("targetText");
+    const inputEl = document.getElementById("inputText");
+    const timeEl = document.getElementById("timeValue");
+    const accuracyEl = document.getElementById("accuracyValue");
+    const wpmEl = document.getElementById("wpmValue");
+    const statusEl = document.getElementById("status");
+    const resetBtn = document.getElementById("resetBtn");
+
+    let running = false;
+    let startTimeMs = 0;
+    let elapsedSeconds = 0;
+    let timerId = null;
+
+    function computeStats(input, elapsed) {
+      let correct = 0;
+      const typedLength = input.length;
+
+      for (let i = 0; i < typedLength && i < targetText.length; i += 1) {
+        if (input[i] === targetText[i]) {
+          correct += 1;
+        }
+      }
+
+      const accuracy = typedLength === 0 ? 0 : (correct / typedLength) * 100;
+      const wpm = elapsed <= 0 ? 0 : ((typedLength / 5) / (elapsed / 60));
+
+      return { correct, typedLength, accuracy, wpm };
+    }
+
+    function renderTarget(input) {
+      targetEl.innerHTML = "";
+
+      for (let i = 0; i < targetText.length; i += 1) {
+        const span = document.createElement("span");
+        span.textContent = targetText[i];
+
+        if (i < input.length) {
+          span.className = input[i] === targetText[i] ? "correct" : "incorrect";
+        } else {
+          span.className = "pending";
+        }
+
+        targetEl.appendChild(span);
+      }
+    }
+
+    function updateStats() {
+      if (running) {
+        elapsedSeconds = (Date.now() - startTimeMs) / 1000;
+      }
+
+      const input = inputEl.value;
+      const stats = computeStats(input, elapsedSeconds);
+
+      timeEl.textContent = elapsedSeconds.toFixed(1) + " s";
+      accuracyEl.textContent = stats.accuracy.toFixed(2) + " %";
+      wpmEl.textContent = stats.wpm.toFixed(2);
+
+      return stats;
+    }
+
+    function stopTyping() {
+      running = false;
+      inputEl.disabled = true;
+
+      if (timerId !== null) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+
+      const stats = updateStats();
+      statusEl.textContent =
+        "Completed. Final Accuracy: " +
+        stats.accuracy.toFixed(2) +
+        "% | Final WPM: " +
+        stats.wpm.toFixed(2);
+    }
+
+    function beginTypingIfNeeded() {
+      if (running || inputEl.value.length === 0) {
+        return;
+      }
+
+      running = true;
+      startTimeMs = Date.now();
+      elapsedSeconds = 0;
+      statusEl.textContent = "Typing in progress...";
+
+      if (timerId !== null) {
+        clearInterval(timerId);
+      }
+      timerId = setInterval(updateStats, 100);
+    }
+
+    function resetTyping() {
+      running = false;
+      startTimeMs = 0;
+      elapsedSeconds = 0;
+      inputEl.value = "";
+      inputEl.disabled = false;
+      statusEl.textContent = "Start typing to begin.";
+
+      if (timerId !== null) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+
+      renderTarget("");
+      updateStats();
+      inputEl.focus();
+    }
+
+    resetBtn.addEventListener("click", resetTyping);
+
+    inputEl.addEventListener("input", () => {
+      const cleaned = inputEl.value.replace(/\n/g, " ").slice(0, targetText.length);
+      if (cleaned !== inputEl.value) {
+        inputEl.value = cleaned;
+      }
+
+      beginTypingIfNeeded();
+      renderTarget(inputEl.value);
+      updateStats();
+
+      if (inputEl.value.length >= targetText.length) {
+        stopTyping();
+      }
+    });
+
+    renderTarget("");
+    updateStats();
+    inputEl.focus();
+  </script>
+</body>
+
+</html>

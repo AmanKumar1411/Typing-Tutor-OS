@@ -33,6 +33,7 @@ typing_tutor
 *.temp
 *.bak
 *.backup
+GUIDE.md
 
 # Core dumps
 core
