@@ -189,8 +189,14 @@
     </section>
   </main>
 
+  <script src="./practice_sentences.js"></script>
   <script>
-    const targetText = "systems programming in c requires precision and practice";
+    const fallbackSentence = "systems programming in c requires precision and practice";
+    const sentencePool =
+      Array.isArray(window.PRACTICE_SENTENCES) && window.PRACTICE_SENTENCES.length > 0
+        ? window.PRACTICE_SENTENCES
+        : [fallbackSentence];
+    let targetText = "";
 
     const targetEl = document.getElementById("targetText");
     const inputEl = document.getElementById("inputText");
@@ -204,6 +210,16 @@
     let startTimeMs = 0;
     let elapsedSeconds = 0;
     let timerId = null;
+
+    function pickRandomSentence() {
+      const randomIndex = Math.floor(Math.random() * sentencePool.length);
+      return sentencePool[randomIndex];
+    }
+
+    function loadNewSentence() {
+      targetText = pickRandomSentence();
+      renderTarget("");
+    }
 
     function computeStats(input, elapsed) {
       let correct = 0;
@@ -267,7 +283,8 @@
         "Completed. Final Accuracy: " +
         stats.accuracy.toFixed(2) +
         "% | Final WPM: " +
-        stats.wpm.toFixed(2);
+        stats.wpm.toFixed(2) +
+        " | Press Reset for a new sentence.";
     }
 
     function beginTypingIfNeeded() {
@@ -292,14 +309,14 @@
       elapsedSeconds = 0;
       inputEl.value = "";
       inputEl.disabled = false;
-      statusEl.textContent = "Start typing to begin.";
+      statusEl.textContent = "New sentence loaded. Start typing to begin.";
 
       if (timerId !== null) {
         clearInterval(timerId);
         timerId = null;
       }
 
-      renderTarget("");
+      loadNewSentence();
       updateStats();
       inputEl.focus();
     }
@@ -321,7 +338,8 @@
       }
     });
 
-    renderTarget("");
+    loadNewSentence();
+    statusEl.textContent = "New sentence loaded. Start typing to begin.";
     updateStats();
     inputEl.focus();
   </script>
