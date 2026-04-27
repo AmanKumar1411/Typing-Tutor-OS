@@ -34,7 +34,7 @@ typing_tutor
 *.bak
 *.backup
 GUIDE.md
-
+report.tex
 # Core dumps
 core
 core.*

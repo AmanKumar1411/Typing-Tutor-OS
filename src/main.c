@@ -280,10 +280,16 @@ static void build_live_stats(
 }
 
 static SessionAction run_setup_screen(size_t *selected_time_index, DifficultyMode *selected_difficulty) {
+    int needs_render = 1;
+
     while (1) {
         int key;
 
-        screen_render_setup(*selected_time_index, (int)(*selected_difficulty), TIME_OPTIONS, TIME_OPTION_COUNT);
+        if (needs_render) {
+            screen_render_setup(*selected_time_index, (int)(*selected_difficulty), TIME_OPTIONS, TIME_OPTION_COUNT);
+            needs_render = 0;
+        }
+
         key = keyboard_read_char_nonblocking();
 
         if (key == KEY_ESC || key == 3) {
@@ -293,14 +299,26 @@ static SessionAction run_setup_screen(size_t *selected_time_index, DifficultyMod
         if (key >= '1' && key <= '5') {
             size_t next_index = (size_t)(key - '1');
             if (next_index < TIME_OPTION_COUNT) {
-                *selected_time_index = next_index;
+                if (*selected_time_index != next_index) {
+                    *selected_time_index = next_index;
+                    needs_render = 1;
+                }
             }
         } else if (key == 'e' || key == 'E') {
-            *selected_difficulty = DIFFICULTY_EASY;
+            if (*selected_difficulty != DIFFICULTY_EASY) {
+                *selected_difficulty = DIFFICULTY_EASY;
+                needs_render = 1;
+            }
         } else if (key == 'm' || key == 'M') {
-            *selected_difficulty = DIFFICULTY_MEDIUM;
+            if (*selected_difficulty != DIFFICULTY_MEDIUM) {
+                *selected_difficulty = DIFFICULTY_MEDIUM;
+                needs_render = 1;
+            }
         } else if (key == 'h' || key == 'H') {
-            *selected_difficulty = DIFFICULTY_HARD;
+            if (*selected_difficulty != DIFFICULTY_HARD) {
+                *selected_difficulty = DIFFICULTY_HARD;
+                needs_render = 1;
+            }
         } else if (key == KEY_ENTER || key == '\n') {
             return ACTION_RESTART_SAME;
         }
@@ -321,6 +339,9 @@ static SessionAction run_typing_session(int time_limit_seconds, DifficultyMode d
     int timer_started = 0;
     int finished = 0;
     int timed_out = 0;
+    int stdout_is_tty = isatty(STDOUT_FILENO);
+    int needs_render = 1;
+    double next_non_tty_render_time = 0.0;
 
     target_stream = (char *)mem_alloc(target_capacity);
     target_stream[0] = '\0';
@@ -348,6 +369,7 @@ static SessionAction run_typing_session(int time_limit_seconds, DifficultyMode d
             if (input_len > 0) {
                 input_len--;
                 input_buffer[input_len] = '\0';
+                needs_render = 1;
             }
         } else if (key >= 32 && key <= 126) {
             int accept_char = 1;
@@ -382,6 +404,7 @@ static SessionAction run_typing_session(int time_limit_seconds, DifficultyMode d
                         input_buffer[input_len] = (char)key;
                         input_len++;
                         input_buffer[input_len] = '\0';
+                        needs_render = 1;
                     }
                 }
             }
@@ -398,7 +421,11 @@ static SessionAction run_typing_session(int time_limit_seconds, DifficultyMode d
             elapsed_seconds = 0.0;
         }
 
-        {
+        if (!stdout_is_tty && timer_started && elapsed_seconds >= next_non_tty_render_time) {
+            needs_render = 1;
+        }
+
+        if (stdout_is_tty || needs_render || finished) {
             ScreenLiveStats live_stats;
             build_live_stats(
                 target_stream,
@@ -411,6 +438,11 @@ static SessionAction run_typing_session(int time_limit_seconds, DifficultyMode d
                 &live_stats
             );
             screen_render_typing(target_stream, input_buffer, input_len, &live_stats);
+            needs_render = 0;
+
+            if (!stdout_is_tty && timer_started) {
+                next_non_tty_render_time = elapsed_seconds + 1.0;
+            }
         }
 
         usleep(10000);
