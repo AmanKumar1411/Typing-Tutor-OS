@@ -95,7 +95,6 @@ void screen_render_typing(const char *target_stream, const char *input, size_t i
     size_t printed_words = 0;
     size_t start_word;
     size_t end_word;
-    size_t tail_start;
     int use_color = screen_use_color();
 
     if (stats->active_word_index > 6) {
@@ -105,35 +104,21 @@ void screen_render_typing(const char *target_stream, const char *input, size_t i
     }
     end_word = start_word + WINDOW_WORD_COUNT;
 
-    tail_start = 0;
-    if (input_len > 90) {
-        tail_start = input_len - 90;
+    printf("\033[H");
+
+    if (use_color) {
+        printf("\033[36m%.1fs \033[0m", stats->remaining_seconds);
+        printf("\033[35m%.2f WPM \033[0m", stats->wpm);
+        printf("\033[33m%.2f%% Acc \033[0m", stats->accuracy);
+        printf("\033[2m(PB: %.2f)\033[0m", stats->personal_best_wpm);
+    } else {
+        printf("%.1fs | %.2f WPM | %.2f%% Acc | PB: %.2f",
+               stats->remaining_seconds,
+               stats->wpm,
+               stats->accuracy,
+               stats->personal_best_wpm);
     }
-
-    screen_clear();
-
-    printf("==================== Typing Tutor ====================\n");
-    printf("Mode: %d sec  |  Difficulty: %s  |  ESC Quit  |  TAB Restart\n",
-           stats->selected_time_seconds,
-           stats->difficulty_name);
-    printf("------------------------------------------------------\n");
-    printf("Time: %.1fs elapsed | %.1fs left | WPM: %.2f | Accuracy: %.2f%%\n",
-           stats->elapsed_seconds,
-           stats->remaining_seconds,
-           stats->wpm,
-           stats->accuracy);
-    printf("Chars: %zu correct / %zu errors | Words: %zu total (%zu ok, %zu wrong)\n",
-           stats->correct_chars,
-           stats->errors,
-           stats->total_words_typed,
-           stats->correct_words,
-           stats->incorrect_words);
-    printf("Streak: current %zu | best %zu\n",
-           stats->current_streak,
-           stats->best_streak);
-    printf("------------------------------------------------------\n\n");
-
-    printf("Word Stream:\n");
+    printf("\033[K\n\n");
 
     while (target_stream[target_pos] != '\0' && word_index < end_word) {
         size_t target_word_start = target_pos;
@@ -185,10 +170,20 @@ void screen_render_typing(const char *target_stream, const char *input, size_t i
                     printf("-%.*s", (int)target_word_len, target_stream + target_word_start);
                 }
             } else if (is_active_word) {
-                if (use_color) {
-                    printf("\033[1;30;43m%.*s\033[0m", (int)target_word_len, target_stream + target_word_start);
-                } else {
-                    printf("[%.*s]", (int)target_word_len, target_stream + target_word_start);
+                size_t i;
+                for (i = 0; i < target_word_len; i++) {
+                    if (i < input_word_len) {
+                        if (input[input_word_start + i] == target_stream[target_word_start + i]) {
+                            if (use_color) printf("\033[32m%c\033[0m", target_stream[target_word_start + i]);
+                            else printf("%c", target_stream[target_word_start + i]);
+                        } else {
+                            if (use_color) printf("\033[31m%c\033[0m", target_stream[target_word_start + i]);
+                            else printf("%c", target_stream[target_word_start + i]);
+                        }
+                    } else {
+                        if (use_color) printf("\033[2m%c\033[0m", target_stream[target_word_start + i]);
+                        else printf("%c", target_stream[target_word_start + i]);
+                    }
                 }
             } else {
                 if (use_color) {
@@ -199,36 +194,15 @@ void screen_render_typing(const char *target_stream, const char *input, size_t i
             }
 
             printed_words++;
-            if (printed_words % WORDS_PER_LINE == 0) {
-                printf("\n");
+            if (printed_words > 0 && printed_words % WORDS_PER_LINE == 0) {
+                printf("\033[K\n");
             }
         }
 
         word_index++;
     }
 
-    if (printed_words % WORDS_PER_LINE != 0) {
-        printf("\n");
-    }
-
-    printf("\nYour Input:\n");
-    if (tail_start > 0) {
-        printf("...");
-    }
-
-    if (input_len > tail_start) {
-        printf("%.*s", (int)(input_len - tail_start), input + tail_start);
-    }
-
-    if (use_color) {
-        printf("\033[36m|\033[0m");
-    } else {
-        printf("|");
-    }
-
-    printf("\n\n");
-    printf("Footer: timer starts on first key | smooth real-time stream typing\n");
-
+    printf("\033[J");
     fflush(stdout);
 }
 
@@ -239,33 +213,78 @@ void screen_render_summary(const ScreenSummaryStats *summary) {
 
     printf("==================== Session Summary ====================\n\n");
 
-    if (summary->timed_out) {
-        printf("Result: Time limit reached successfully.\n\n");
-    } else {
-        printf("Result: Session finished before timer end.\n\n");
-    }
+    printf("Session #%d (%d sec, %s)\n\n", summary->session_number, summary->time_mode_seconds, "Medium");
 
-    printf("Final WPM: %.2f\n", summary->final_wpm);
-    printf("Final Accuracy: %.2f%%\n", summary->final_accuracy);
-    printf("Total Words Typed: %zu\n", summary->total_words_typed);
-    printf("Correct Words: %zu\n", summary->correct_words);
-    printf("Incorrect Words: %zu\n", summary->incorrect_words);
-    printf("Current Streak: %zu\n", summary->current_streak);
-    printf("Best Streak: %zu\n", summary->best_streak);
+    printf("  WPM: %.2f\n", summary->final_wpm);
+    printf("  Acc: %.2f%%\n", summary->final_accuracy);
+    printf("  Words: %zu (%zu correct, %zu incorrect)\n", summary->total_words_typed, summary->correct_words, summary->incorrect_words);
 
     if (summary->is_new_personal_best && use_color) {
-        printf("Personal Best WPM: \033[32m%.2f (NEW BEST)\033[0m\n", summary->personal_best_wpm);
-    } else if (summary->is_new_personal_best) {
-        printf("Personal Best WPM: %.2f (NEW BEST)\n", summary->personal_best_wpm);
+        printf("\n  \033[32mNew Personal Best WPM!\033[0m\n");
     } else {
-        printf("Personal Best WPM: %.2f\n", summary->personal_best_wpm);
+        printf("\n  Personal Best: %.2f WPM\n", summary->personal_best_wpm);
     }
 
-    printf("\nControls:\n");
-    printf("- TAB: restart instantly with same settings\n");
-    printf("- ENTER: continue to setup screen\n");
-    printf("- ESC: quit\n");
-    printf("- Any other key: restart with same settings\n");
+    printf("\n------------------------------------------------------\n");
+    printf("  [TAB] Restart  |  [ENTER] Setup  |  [H] History\n");
+    printf("  [D] Dashboard  |  [ESC] Quit\n");
+    printf("------------------------------------------------------\n");
 
+    fflush(stdout);
+}
+
+void screen_render_history(const SessionRecord *history, size_t history_count, int current_page) {
+    size_t i;
+    size_t page_size = 10;
+    size_t start_index = current_page * page_size;
+    size_t end_index = start_index + page_size;
+    if (end_index > history_count) {
+        end_index = history_count;
+    }
+
+    screen_clear();
+    printf("==================== Session History ====================\n\n");
+
+    if (history_count == 0) {
+        printf("  No sessions completed yet.\n");
+    } else {
+        printf("  %-5s %-8s %-10s %-10s %-10s %-10s\n", "#", "Time", "Diff", "WPM", "Acc", "Words");
+        printf("  ------------------------------------------------------\n");
+        for (i = start_index; i < end_index; i++) {
+            const SessionRecord *r = &history[i];
+            printf("  %-5d %-8d %-10s %-10.2f %-10.2f %-10zu\n",
+                   r->session_number,
+                   r->time_mode_seconds,
+                   r->difficulty_name,
+                   r->final_wpm,
+                   r->final_accuracy,
+                   r->total_words_typed);
+        }
+    }
+
+    printf("\n------------------------------------------------------\n");
+    printf("  Page %d/%zu | [B] Back to Summary\n", current_page + 1, (history_count + page_size - 1) / page_size);
+    printf("------------------------------------------------------\n");
+    fflush(stdout);
+}
+
+void screen_render_dashboard(const PerformanceDashboard *dashboard) {
+    screen_clear();
+    printf("==================== Performance Dashboard ====================\n\n");
+
+    printf("  Total Sessions: %zu\n", dashboard->total_sessions_completed);
+    printf("  Total Time Typing: %.1f seconds\n", dashboard->total_time_typing_seconds);
+    printf("  Total Words Typed: %zu\n", dashboard->total_words_typed);
+    printf("\n");
+    printf("  Best WPM Ever: %.2f\n", dashboard->best_wpm_ever);
+    printf("  Best Accuracy Ever: %.2f%%\n", dashboard->best_accuracy_ever);
+    printf("\n");
+    printf("  Average WPM: %.2f\n", dashboard->average_wpm);
+    printf("  Average Accuracy: %.2f%%\n", dashboard->average_accuracy);
+
+
+    printf("\n------------------------------------------------------\n");
+    printf("  [B] Back to Summary\n");
+    printf("------------------------------------------------------\n");
     fflush(stdout);
 }

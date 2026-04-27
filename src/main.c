@@ -14,6 +14,7 @@
 #define INITIAL_WORD_STREAM_WORDS 140
 #define EXTEND_WORD_STREAM_WORDS 80
 #define TARGET_AHEAD_THRESHOLD 220
+#define HISTORY_FILE "typing_history.dat"
 
 typedef enum DifficultyMode {
     DIFFICULTY_EASY = 0,
@@ -21,19 +22,20 @@ typedef enum DifficultyMode {
     DIFFICULTY_HARD = 2
 } DifficultyMode;
 
-typedef enum SessionAction {
-    ACTION_QUIT = 0,
-    ACTION_RESTART_SAME = 1,
-    ACTION_TO_SETUP = 2
-} SessionAction;
+typedef enum AppState {
+    STATE_SETUP,
+    STATE_TYPING,
+    STATE_SUMMARY,
+    STATE_HISTORY,
+    STATE_DASHBOARD,
+    STATE_QUIT
+} AppState;
 
 typedef struct WordProgress {
     size_t active_word_index;
     size_t total_words_typed;
     size_t correct_words;
     size_t incorrect_words;
-    size_t current_streak;
-    size_t best_streak;
 } WordProgress;
 
 static const int TIME_OPTIONS[] = {15, 30, 60, 120, 300};
@@ -58,6 +60,12 @@ static const char *const HARD_WORDS[] = {
     "cryptic", "pharaoh", "whiplash", "fizzbuzz", "jazzy", "keymix", "waveform", "outjump", "buckshot", "zephyrs",
     "fluency", "backdrop", "wavelength", "hardware", "microchip", "benchmark", "workflow", "jackknife", "highway", "context"
 };
+
+static SessionRecord g_session_history[MAX_SESSION_HISTORY];
+static size_t g_history_count = 0;
+static int g_session_counter = 0;
+static ScreenSummaryStats g_last_summary;
+static int g_has_last_summary = 0;
 
 static double time_now_seconds(void) {
     struct timeval tv;
@@ -165,14 +173,11 @@ static void compute_word_progress(
 ) {
     size_t target_pos = 0;
     size_t input_pos = 0;
-    size_t current_streak = 0;
 
     progress->active_word_index = 0;
     progress->total_words_typed = 0;
     progress->correct_words = 0;
     progress->incorrect_words = 0;
-    progress->current_streak = 0;
-    progress->best_streak = 0;
 
     while (input_pos < input_len) {
         size_t input_word_start = input_pos;
@@ -225,16 +230,9 @@ static void compute_word_progress(
         progress->total_words_typed++;
         if (is_correct) {
             progress->correct_words++;
-            current_streak++;
-            if (current_streak > progress->best_streak) {
-                progress->best_streak = current_streak;
-            }
         } else {
             progress->incorrect_words++;
-            current_streak = 0;
         }
-
-        progress->current_streak = current_streak;
 
         if (input_word_completed) {
             progress->active_word_index++;
@@ -249,16 +247,14 @@ static void build_live_stats(
     double elapsed_seconds,
     int timer_started,
     int selected_time_seconds,
-    DifficultyMode difficulty,
+    double personal_best_wpm,
     ScreenLiveStats *stats
 ) {
     WordProgress progress;
     size_t correct_chars = str_count_correct(target_stream, input, input_len);
-    size_t errors = (input_len >= correct_chars) ? (input_len - correct_chars) : 0;
 
     compute_word_progress(target_stream, input, input_len, 0, &progress);
 
-    stats->elapsed_seconds = elapsed_seconds;
     stats->remaining_seconds = timer_started
         ? ((elapsed_seconds < (double)selected_time_seconds)
             ? ((double)selected_time_seconds - elapsed_seconds)
@@ -266,20 +262,111 @@ static void build_live_stats(
         : (double)selected_time_seconds;
     stats->accuracy = math_percent(correct_chars, input_len);
     stats->wpm = math_wpm(input_len, elapsed_seconds);
-    stats->correct_chars = correct_chars;
-    stats->errors = errors;
-    stats->total_words_typed = progress.total_words_typed;
-    stats->correct_words = progress.correct_words;
-    stats->incorrect_words = progress.incorrect_words;
-    stats->current_streak = progress.current_streak;
-    stats->best_streak = progress.best_streak;
+    stats->personal_best_wpm = personal_best_wpm;
     stats->active_word_index = progress.active_word_index;
-    stats->timer_started = timer_started;
-    stats->selected_time_seconds = selected_time_seconds;
-    stats->difficulty_name = difficulty_name(difficulty);
 }
 
-static SessionAction run_setup_screen(size_t *selected_time_index, DifficultyMode *selected_difficulty) {
+static void save_history_to_file(void) {
+    FILE *f = fopen(HISTORY_FILE, "wb");
+    if (!f) return;
+    fwrite(&g_history_count, sizeof(g_history_count), 1, f);
+    fwrite(g_session_history, sizeof(SessionRecord), g_history_count, f);
+    fclose(f);
+}
+
+static void load_history_from_file(void) {
+    FILE *f = fopen(HISTORY_FILE, "rb");
+    if (!f) return;
+    if (fread(&g_history_count, sizeof(g_history_count), 1, f) != 1) {
+        g_history_count = 0;
+    }
+    if (g_history_count > MAX_SESSION_HISTORY) {
+        g_history_count = 0;
+    }
+    if (g_history_count > 0) {
+        if (fread(g_session_history, sizeof(SessionRecord), g_history_count, f) != g_history_count) {
+            g_history_count = 0;
+        }
+    }
+    fclose(f);
+    g_session_counter = g_history_count;
+}
+
+static void add_session_to_history(const SessionRecord *record) {
+    if (g_history_count < MAX_SESSION_HISTORY) {
+        g_session_history[g_history_count++] = *record;
+        save_history_to_file();
+    }
+}
+
+static void build_dashboard(PerformanceDashboard *dashboard) {
+    size_t i;
+    dashboard->total_sessions_completed = g_history_count;
+    dashboard->total_time_typing_seconds = 0;
+    dashboard->total_words_typed = 0;
+    dashboard->best_wpm_ever = 0;
+    dashboard->best_accuracy_ever = 0;
+    double total_wpm = 0;
+    double total_accuracy = 0;
+
+    for (i = 0; i < g_history_count; i++) {
+        dashboard->total_time_typing_seconds += g_session_history[i].session_duration_seconds;
+        dashboard->total_words_typed += g_session_history[i].total_words_typed;
+        total_wpm += g_session_history[i].final_wpm;
+        total_accuracy += g_session_history[i].final_accuracy;
+        if (g_session_history[i].final_wpm > dashboard->best_wpm_ever) {
+            dashboard->best_wpm_ever = g_session_history[i].final_wpm;
+        }
+        if (g_session_history[i].final_accuracy > dashboard->best_accuracy_ever) {
+            dashboard->best_accuracy_ever = g_session_history[i].final_accuracy;
+        }
+    }
+
+    if (g_history_count > 0) {
+        dashboard->average_wpm = total_wpm / g_history_count;
+        dashboard->average_accuracy = total_accuracy / g_history_count;
+    } else {
+        dashboard->average_wpm = 0;
+        dashboard->average_accuracy = 0;
+    }
+}
+
+static void remember_last_summary(const ScreenSummaryStats *summary) {
+    g_last_summary = *summary;
+    g_has_last_summary = 1;
+}
+
+static int restore_last_summary_from_history(double personal_best_wpm) {
+    const SessionRecord *record;
+
+    if (g_history_count == 0) {
+        return 0;
+    }
+
+    record = &g_session_history[g_history_count - 1];
+    g_last_summary.session_number = record->session_number;
+    g_last_summary.time_mode_seconds = record->time_mode_seconds;
+    g_last_summary.final_wpm = record->final_wpm;
+    g_last_summary.final_accuracy = record->final_accuracy;
+    g_last_summary.total_words_typed = record->total_words_typed;
+    g_last_summary.correct_words = record->correct_words;
+    g_last_summary.incorrect_words = record->incorrect_words;
+    g_last_summary.personal_best_wpm = personal_best_wpm;
+    g_last_summary.is_new_personal_best = 0;
+    g_has_last_summary = 1;
+
+    return 1;
+}
+
+static AppState state_after_secondary_back(void) {
+    if (g_has_last_summary) {
+        return STATE_SUMMARY;
+    }
+
+    return STATE_SETUP;
+}
+
+static AppState run_setup_screen(size_t *selected_time_index, DifficultyMode *selected_difficulty) {
     int needs_render = 1;
 
     while (1) {
@@ -293,7 +380,7 @@ static SessionAction run_setup_screen(size_t *selected_time_index, DifficultyMod
         key = keyboard_read_char_nonblocking();
 
         if (key == KEY_ESC || key == 3) {
-            return ACTION_QUIT;
+            return STATE_QUIT;
         }
 
         if (key >= '1' && key <= '5') {
@@ -320,14 +407,14 @@ static SessionAction run_setup_screen(size_t *selected_time_index, DifficultyMod
                 needs_render = 1;
             }
         } else if (key == KEY_ENTER || key == '\n') {
-            return ACTION_RESTART_SAME;
+            return STATE_TYPING;
         }
 
         usleep(10000);
     }
 }
 
-static SessionAction run_typing_session(int time_limit_seconds, DifficultyMode difficulty, double *personal_best_wpm) {
+static AppState run_typing_session(int time_limit_seconds, DifficultyMode difficulty, double *personal_best_wpm) {
     char *target_stream;
     char *input_buffer;
     size_t target_capacity = INITIAL_TARGET_CAPACITY;
@@ -336,12 +423,11 @@ static SessionAction run_typing_session(int time_limit_seconds, DifficultyMode d
     size_t input_len = 0;
     double start_time = 0.0;
     double elapsed_seconds = 0.0;
+    double last_render_time = 0.0;
     int timer_started = 0;
     int finished = 0;
-    int timed_out = 0;
     int stdout_is_tty = isatty(STDOUT_FILENO);
     int needs_render = 1;
-    double next_non_tty_render_time = 0.0;
 
     target_stream = (char *)mem_alloc(target_capacity);
     target_stream[0] = '\0';
@@ -350,19 +436,21 @@ static SessionAction run_typing_session(int time_limit_seconds, DifficultyMode d
     input_buffer = (char *)mem_alloc(input_capacity);
     mem_set(input_buffer, '\0', input_capacity);
 
+    screen_clear();
+
     while (!finished) {
         int key = keyboard_read_char_nonblocking();
 
         if (key == KEY_ESC || key == 3) {
             mem_free(input_buffer);
             mem_free(target_stream);
-            return ACTION_QUIT;
+            return STATE_QUIT;
         }
 
         if (key == KEY_TAB) {
             mem_free(input_buffer);
             mem_free(target_stream);
-            return ACTION_RESTART_SAME;
+            return STATE_TYPING;
         }
 
         if (key == KEY_BACKSPACE || key == KEY_DELETE) {
@@ -414,43 +502,41 @@ static SessionAction run_typing_session(int time_limit_seconds, DifficultyMode d
             elapsed_seconds = time_now_seconds() - start_time;
             if (elapsed_seconds >= (double)time_limit_seconds) {
                 elapsed_seconds = (double)time_limit_seconds;
-                timed_out = 1;
                 finished = 1;
             }
         } else {
             elapsed_seconds = 0.0;
         }
 
-        if (!stdout_is_tty && timer_started && elapsed_seconds >= next_non_tty_render_time) {
-            needs_render = 1;
-        }
-
-        if (stdout_is_tty || needs_render || finished) {
-            ScreenLiveStats live_stats;
-            build_live_stats(
-                target_stream,
-                input_buffer,
-                input_len,
-                elapsed_seconds,
-                timer_started,
-                time_limit_seconds,
-                difficulty,
-                &live_stats
-            );
-            screen_render_typing(target_stream, input_buffer, input_len, &live_stats);
-            needs_render = 0;
-
-            if (!stdout_is_tty && timer_started) {
-                next_non_tty_render_time = elapsed_seconds + 1.0;
+        {
+            double current_time = time_now_seconds();
+            double time_since_render = current_time - last_render_time;
+            
+            if (stdout_is_tty && (needs_render || (timer_started && time_since_render >= 0.016))) {
+                ScreenLiveStats live_stats;
+                build_live_stats(
+                    target_stream,
+                    input_buffer,
+                    input_len,
+                    elapsed_seconds,
+                    timer_started,
+                    time_limit_seconds,
+                    *personal_best_wpm,
+                    &live_stats
+                );
+                screen_render_typing(target_stream, input_buffer, input_len, &live_stats);
+                needs_render = 0;
+                last_render_time = current_time;
             }
         }
 
-        usleep(10000);
+        usleep(1000);
     }
 
     {
         WordProgress summary_progress;
         ScreenSummaryStats summary;
+        SessionRecord new_record;
         size_t correct_chars = str_count_correct(target_stream, input_buffer, input_len);
         double final_accuracy = math_percent(correct_chars, input_len);
         double final_wpm = math_wpm(input_len, elapsed_seconds);
@@ -463,19 +549,43 @@ static SessionAction run_typing_session(int time_limit_seconds, DifficultyMode d
             is_new_best = 1;
         }
 
+        g_session_counter++;
+        summary.session_number = g_session_counter;
+        summary.time_mode_seconds = time_limit_seconds;
         summary.final_wpm = final_wpm;
         summary.final_accuracy = final_accuracy;
         summary.total_words_typed = summary_progress.total_words_typed;
         summary.correct_words = summary_progress.correct_words;
         summary.incorrect_words = summary_progress.incorrect_words;
-        summary.current_streak = summary_progress.current_streak;
-        summary.best_streak = summary_progress.best_streak;
         summary.personal_best_wpm = *personal_best_wpm;
         summary.is_new_personal_best = is_new_best;
-        summary.timed_out = timed_out;
 
-        screen_render_summary(&summary);
+        new_record.session_number = g_session_counter;
+        new_record.time_mode_seconds = time_limit_seconds;
+        new_record.difficulty_name = difficulty_name(difficulty);
+        new_record.final_wpm = final_wpm;
+        new_record.final_accuracy = final_accuracy;
+        new_record.total_words_typed = summary_progress.total_words_typed;
+        new_record.correct_words = summary_progress.correct_words;
+        new_record.incorrect_words = summary_progress.incorrect_words;
+        new_record.session_duration_seconds = elapsed_seconds;
+        add_session_to_history(&new_record);
+
+        remember_last_summary(&summary);
     }
+
+    mem_free(input_buffer);
+    mem_free(target_stream);
+
+    return STATE_SUMMARY;
+}
+
+static AppState run_summary_screen(void) {
+    if (!g_has_last_summary) {
+        return STATE_SETUP;
+    }
+
+    screen_render_summary(&g_last_summary);
 
     while (1) {
         int key = keyboard_read_char_nonblocking();
@@ -485,26 +595,44 @@ static SessionAction run_typing_session(int time_limit_seconds, DifficultyMode d
             continue;
         }
 
-        mem_free(input_buffer);
-        mem_free(target_stream);
+        if (key == KEY_ESC || key == 3) return STATE_QUIT;
+        if (key == KEY_ENTER || key == '\n') return STATE_SETUP;
+        if (key == KEY_TAB) return STATE_TYPING;
+        if (key == 'h' || key == 'H') return STATE_HISTORY;
+        if (key == 'd' || key == 'D') return STATE_DASHBOARD;
+    }
+}
 
-        if (key == KEY_ESC || key == 3) {
-            return ACTION_QUIT;
+static AppState run_history_screen(void) {
+    int page = 0;
+    while (1) {
+        screen_render_history(g_session_history, g_history_count, page);
+        int key = keyboard_read_char_nonblocking();
+        if (key == 'b' || key == 'B' || key == KEY_ESC || key == 3) {
+            return state_after_secondary_back();
         }
+        usleep(10000);
+    }
+}
 
-        if (key == KEY_ENTER || key == '\n') {
-            return ACTION_TO_SETUP;
+static AppState run_dashboard_screen(void) {
+    PerformanceDashboard dashboard;
+    build_dashboard(&dashboard);
+    while (1) {
+        screen_render_dashboard(&dashboard);
+        int key = keyboard_read_char_nonblocking();
+        if (key == 'b' || key == 'B' || key == KEY_ESC || key == 3) {
+            return state_after_secondary_back();
         }
-
-        return ACTION_RESTART_SAME;
+        usleep(10000);
     }
 }
 
 int main(void) {
     size_t selected_time_index = 2;
     DifficultyMode selected_difficulty = DIFFICULTY_MEDIUM;
-    int show_setup = 1;
     double personal_best_wpm = 0.0;
+    AppState current_state = STATE_SETUP;
 
     {
         struct timeval seed_tv;
@@ -517,26 +645,33 @@ int main(void) {
         return 1;
     }
 
-    while (1) {
-        SessionAction action;
+    load_history_from_file();
+    {
+        PerformanceDashboard db;
+        build_dashboard(&db);
+        personal_best_wpm = db.best_wpm_ever;
+        restore_last_summary_from_history(personal_best_wpm);
+    }
 
-        if (show_setup) {
-            action = run_setup_screen(&selected_time_index, &selected_difficulty);
-            if (action == ACTION_QUIT) {
+    while (current_state != STATE_QUIT) {
+        switch (current_state) {
+            case STATE_SETUP:
+                current_state = run_setup_screen(&selected_time_index, &selected_difficulty);
                 break;
-            }
-        }
-
-        action = run_typing_session(TIME_OPTIONS[selected_time_index], selected_difficulty, &personal_best_wpm);
-
-        if (action == ACTION_QUIT) {
-            break;
-        }
-
-        if (action == ACTION_TO_SETUP) {
-            show_setup = 1;
-        } else {
-            show_setup = 0;
+            case STATE_TYPING:
+                current_state = run_typing_session(TIME_OPTIONS[selected_time_index], selected_difficulty, &personal_best_wpm);
+                break;
+            case STATE_SUMMARY:
+                current_state = run_summary_screen();
+                break;
+            case STATE_HISTORY:
+                current_state = run_history_screen();
+                break;
+            case STATE_DASHBOARD:
+                current_state = run_dashboard_screen();
+                break;
+            case STATE_QUIT:
+                break;
         }
     }
 
