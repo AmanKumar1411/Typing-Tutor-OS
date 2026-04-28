@@ -3,27 +3,95 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#define WINDOW_WORD_COUNT 32
-#define WORDS_PER_LINE 8
-
 static int screen_use_color(void) {
     return isatty(STDOUT_FILENO);
 }
 
-static int segment_equals(const char *left, size_t left_len, const char *right, size_t right_len) {
-    size_t i;
-
-    if (left_len != right_len) {
-        return 0;
+static char ascii_lower(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return (char)(c + ('a' - 'A'));
     }
 
-    for (i = 0; i < left_len; i++) {
-        if (left[i] != right[i]) {
+    return c;
+}
+
+static int is_word_compare_char(char c) {
+    return (c >= 'A' && c <= 'Z') ||
+        (c >= 'a' && c <= 'z') ||
+        (c >= '0' && c <= '9');
+}
+
+static int chars_match_for_flow(char left, char right) {
+    return ascii_lower(left) == ascii_lower(right);
+}
+
+static int word_segments_match(const char *target, size_t target_len, const char *input, size_t input_len) {
+    size_t target_index = 0;
+    size_t input_index = 0;
+
+    while (target_index < target_len || input_index < input_len) {
+        while (target_index < target_len && !is_word_compare_char(target[target_index])) {
+            target_index++;
+        }
+
+        while (input_index < input_len && !is_word_compare_char(input[input_index])) {
+            input_index++;
+        }
+
+        if (target_index == target_len || input_index == input_len) {
+            break;
+        }
+
+        if (!chars_match_for_flow(target[target_index], input[input_index])) {
             return 0;
+        }
+
+        target_index++;
+        input_index++;
+    }
+
+    while (target_index < target_len && !is_word_compare_char(target[target_index])) {
+        target_index++;
+    }
+
+    while (input_index < input_len && !is_word_compare_char(input[input_index])) {
+        input_index++;
+    }
+
+    return target_index == target_len && input_index == input_len;
+}
+
+static size_t compare_char_index_at(const char *text, size_t len, size_t position) {
+    size_t i;
+    size_t compare_index = 0;
+
+    for (i = 0; i < position && i < len; i++) {
+        if (is_word_compare_char(text[i])) {
+            compare_index++;
         }
     }
 
-    return 1;
+    return compare_index;
+}
+
+static int get_compare_char_at(const char *text, size_t len, size_t compare_index, char *out) {
+    size_t i;
+    size_t current_index = 0;
+
+    for (i = 0; i < len; i++) {
+        if (!is_word_compare_char(text[i])) {
+            continue;
+        }
+
+        if (current_index == compare_index) {
+            *out = text[i];
+            return 1;
+        }
+
+        current_index++;
+    }
+
+    return 0;
 }
 
 void screen_clear(void) {
@@ -54,7 +122,7 @@ void screen_render_setup(size_t selected_time_index, int selected_difficulty, co
         }
     }
 
-    printf("\n\nSelect Difficulty (press E / M / H):\n");
+    printf("\n\nSelect Difficulty (press E / M / h):\n");
 
     if (selected_difficulty == 0 && use_color) {
         printf("\033[1;30;42m Easy \033[0m  ");
@@ -82,6 +150,7 @@ void screen_render_setup(size_t selected_time_index, int selected_difficulty, co
 
     printf("\nControls:\n");
     printf("- ENTER: start test with selected settings\n");
+    printf("- H: view history\n");
     printf("- ESC: quit application\n");
     printf("\nTimer starts only on your first valid key press.\n");
 
@@ -97,12 +166,8 @@ void screen_render_typing(const char *target_stream, const char *input, size_t i
     size_t end_word;
     int use_color = screen_use_color();
 
-    if (stats->active_word_index > 6) {
-        start_word = stats->active_word_index - 6;
-    } else {
-        start_word = 0;
-    }
-    end_word = start_word + WINDOW_WORD_COUNT;
+    start_word = stats->word_window_start_index;
+    end_word = start_word + SCREEN_VISIBLE_WORD_COUNT;
 
     printf("\033[H");
 
@@ -153,7 +218,7 @@ void screen_render_typing(const char *target_stream, const char *input, size_t i
             }
 
             if (is_completed_word) {
-                int is_correct = segment_equals(
+                int is_correct = word_segments_match(
                     target_stream + target_word_start,
                     target_word_len,
                     input + input_word_start,
@@ -172,17 +237,34 @@ void screen_render_typing(const char *target_stream, const char *input, size_t i
             } else if (is_active_word) {
                 size_t i;
                 for (i = 0; i < target_word_len; i++) {
-                    if (i < input_word_len) {
-                        if (input[input_word_start + i] == target_stream[target_word_start + i]) {
-                            if (use_color) printf("\033[32m%c\033[0m", target_stream[target_word_start + i]);
-                            else printf("%c", target_stream[target_word_start + i]);
+                    char target_char = target_stream[target_word_start + i];
+
+                    if (is_word_compare_char(target_char)) {
+                        char input_char;
+                        size_t compare_index = compare_char_index_at(
+                            target_stream + target_word_start,
+                            target_word_len,
+                            i
+                        );
+
+                        if (get_compare_char_at(input + input_word_start, input_word_len, compare_index, &input_char)) {
+                            if (chars_match_for_flow(input_char, target_char)) {
+                                if (use_color) printf("\033[32m%c\033[0m", target_char);
+                                else printf("%c", target_char);
+                            } else {
+                                if (use_color) printf("\033[31m%c\033[0m", target_char);
+                                else printf("%c", target_char);
+                            }
                         } else {
-                            if (use_color) printf("\033[31m%c\033[0m", target_stream[target_word_start + i]);
-                            else printf("%c", target_stream[target_word_start + i]);
+                            if (use_color) printf("\033[2m%c\033[0m", target_char);
+                            else printf("%c", target_char);
                         }
+                    } else if (i < input_word_len && input[input_word_start + i] == target_char) {
+                        if (use_color) printf("\033[32m%c\033[0m", target_char);
+                        else printf("%c", target_char);
                     } else {
-                        if (use_color) printf("\033[2m%c\033[0m", target_stream[target_word_start + i]);
-                        else printf("%c", target_stream[target_word_start + i]);
+                        if (use_color) printf("\033[2m%c\033[0m", target_char);
+                        else printf("%c", target_char);
                     }
                 }
             } else {
@@ -194,7 +276,7 @@ void screen_render_typing(const char *target_stream, const char *input, size_t i
             }
 
             printed_words++;
-            if (printed_words > 0 && printed_words % WORDS_PER_LINE == 0) {
+            if (printed_words > 0 && printed_words % SCREEN_WORDS_PER_LINE == 0) {
                 printf("\033[K\n");
             }
         }
@@ -236,6 +318,7 @@ void screen_render_summary(const ScreenSummaryStats *summary) {
 void screen_render_history(const SessionRecord *history, size_t history_count, int current_page) {
     size_t i;
     size_t page_size = 10;
+    size_t total_pages = history_count == 0 ? 1 : (history_count + page_size - 1) / page_size;
     size_t start_index = current_page * page_size;
     size_t end_index = start_index + page_size;
     if (end_index > history_count) {
@@ -263,7 +346,7 @@ void screen_render_history(const SessionRecord *history, size_t history_count, i
     }
 
     printf("\n------------------------------------------------------\n");
-    printf("  Page %d/%zu | [B] Back to Summary\n", current_page + 1, (history_count + page_size - 1) / page_size);
+    printf("  Page %d/%zu | [N] Next | [P] Prev | [B] Back\n", current_page + 1, total_pages);
     printf("------------------------------------------------------\n");
     fflush(stdout);
 }
